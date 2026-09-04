@@ -151,7 +151,8 @@
   const canvasContainer   = document.getElementById('canvasContainer');
   const canvasHint        = document.getElementById('canvasHint');
 
-  const API_BASE = 'http://localhost:3001';
+  const API_BASE = window.location.origin;
+  let isServerSmtpConfigured = false;
 
   const emailSubject      = document.getElementById('emailSubject');
   const emailBody         = document.getElementById('emailBody');
@@ -1129,9 +1130,11 @@
 
   btnTestSmtp.addEventListener('click', async () => {
     const smtp = getSmtpConfig();
-    if (!smtp.host) { toast('Enter SMTP host first', 'warning'); return; }
-    if (!smtp.user) { toast('Enter SMTP username', 'warning'); return; }
-    if (!smtp.pass) { toast('Enter SMTP password', 'warning'); return; }
+    if (!isServerSmtpConfigured) {
+      if (!smtp.host) { toast('Enter SMTP host first', 'warning'); return; }
+      if (!smtp.user) { toast('Enter SMTP username', 'warning'); return; }
+      if (!smtp.pass) { toast('Enter SMTP password', 'warning'); return; }
+    }
 
     btnTestSmtp.disabled = true;
     btnTestSmtp.textContent = 'Testing…';
@@ -1374,9 +1377,11 @@
     if (!data.length) { toast('No Excel data loaded', 'warning'); return; }
 
     const smtp = getSmtpConfig();
-    if (!smtp.host) { toast('Enter SMTP host first', 'warning'); openModal(smtpModal); return; }
-    if (!smtp.user) { toast('Enter SMTP username/email', 'warning'); openModal(smtpModal); return; }
-    if (!smtp.pass) { toast('Enter SMTP password', 'warning'); openModal(smtpModal); return; }
+    if (!isServerSmtpConfigured) {
+      if (!smtp.host) { toast('Enter SMTP host first', 'warning'); openModal(smtpModal); return; }
+      if (!smtp.user) { toast('Enter SMTP username/email', 'warning'); openModal(smtpModal); return; }
+      if (!smtp.pass) { toast('Enter SMTP password', 'warning'); openModal(smtpModal); return; }
+    }
 
     const subject = emailSubject.value.trim() || 'Your Certificate';
     const bodyTpl = emailBody.innerHTML.trim() || 'Hi {{firstName}},<br><br>Please find your certificate attached.';
@@ -1544,10 +1549,29 @@
     img.src = 'assets/template.png';
   }
 
+  async function checkServerConfig() {
+    try {
+      const res = await fetch(`${API_BASE}/api/config`);
+      if (res.ok) {
+        const cfg = await res.json();
+        if (cfg.smtpPreconfigured) {
+          isServerSmtpConfigured = true;
+          if (cfg.smtpHost) smtpHost.value = cfg.smtpHost;
+          if (cfg.smtpPort) smtpPort.value = cfg.smtpPort;
+          if (cfg.smtpUser) smtpUser.value = cfg.smtpUser;
+          if (cfg.fromName && !smtpFromName.value) smtpFromName.value = cfg.fromName;
+          smtpPass.placeholder = 'Configured via Server Environment (.env)';
+          updateSmtpBadge(true);
+        }
+      }
+    } catch (_) {}
+  }
+
   // ── Init ───────────────────────────────────────────────────────────
   fontTriggerLabel.style.fontFamily = state.committedFont;
   buildVarChips();
   loadSmtpFromStorage();
+  checkServerConfig();
   restoreDraft();
   buildTemplateSelect();
   updateRowIndicator();
