@@ -151,7 +151,31 @@
   const canvasContainer   = document.getElementById('canvasContainer');
   const canvasHint        = document.getElementById('canvasHint');
 
-  const API_BASE = window.location.origin;
+  function resolveApiBase() {
+    // 1. Explicit global variable configured in index.html or script
+    if (typeof window.EVENT_CERTIFICATE_MAILER_API_BASE === 'string' && window.EVENT_CERTIFICATE_MAILER_API_BASE.trim()) {
+      return window.EVENT_CERTIFICATE_MAILER_API_BASE.trim().replace(/\/+$/, '');
+    }
+
+    // 2. <meta name="api-base-url" content="..."> in document head
+    const metaTag = document.querySelector('meta[name="api-base-url"]')?.getAttribute('content');
+    if (metaTag && metaTag.trim()) {
+      return metaTag.trim().replace(/\/+$/, '');
+    }
+
+    // 3. localStorage override (enables immediate testing on deployed sites via DevTools)
+    try {
+      const stored = localStorage.getItem('event_certificate_mailer_api_base');
+      if (stored && stored.trim()) {
+        return stored.trim().replace(/\/+$/, '');
+      }
+    } catch (_) {}
+
+    // 4. Fallback to current browser origin (localhost or unified fullstack deployment)
+    return window.location.origin;
+  }
+
+  const API_BASE = resolveApiBase();
   let isServerSmtpConfigured = false;
 
   const emailSubject      = document.getElementById('emailSubject');
@@ -1160,7 +1184,7 @@
     } catch (err) {
       smtpTestResult.style.display = 'flex';
       smtpTestResult.className = 'smtp-test-result fail';
-      smtpTestResult.innerHTML = `<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="14" y1="2" x2="2" y2="14"/><line x1="2" y1="2" x2="14" y2="14"/></svg> Cannot reach server — is server.js running? (${esc(err.message)})`;
+      smtpTestResult.innerHTML = `<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="14" y1="2" x2="2" y2="14"/><line x1="2" y1="2" x2="14" y2="14"/></svg> Cannot reach backend API at ${esc(API_BASE)} — is backend running? (${esc(err.message)})`;
     } finally {
       btnTestSmtp.disabled = false;
       btnTestSmtp.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg> Test Connection`;
@@ -1563,8 +1587,15 @@
           smtpPass.placeholder = 'Configured via Server Environment (.env)';
           updateSmtpBadge(true);
         }
+      } else {
+        console.warn(`[EventCertificateMailer] Backend at ${API_BASE} responded with HTTP ${res.status} on /api/config`);
       }
-    } catch (_) {}
+    } catch (err) {
+      console.warn(`[EventCertificateMailer] Could not reach backend API at ${API_BASE}: ${err.message}`);
+      if (window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
+        console.info('[EventCertificateMailer] If your frontend is hosted separately from Render, set <meta name="api-base-url" content="https://your-backend.onrender.com" /> in index.html or run: localStorage.setItem("event_certificate_mailer_api_base", "https://your-backend.onrender.com")');
+      }
+    }
   }
 
   // ── Init ───────────────────────────────────────────────────────────

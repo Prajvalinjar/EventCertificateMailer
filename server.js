@@ -15,13 +15,56 @@ const app = express();
 const PORT = process.env.PORT || 3001;
 
 // ── CORS CONFIGURATION ────────────────────────────────────────────────
-const allowedOrigin = process.env.ALLOWED_ORIGIN;
+const allowedOriginEnv = process.env.ALLOWED_ORIGIN;
 
-if (allowedOrigin && allowedOrigin !== '*') {
-  app.use(cors({ origin: allowedOrigin }));
-} else {
-  app.use(cors());
+function getCorsOptions() {
+  // If ALLOWED_ORIGIN is not specified, empty, or '*', permit all origins
+  if (!allowedOriginEnv || allowedOriginEnv.trim() === '*' || allowedOriginEnv.trim() === '') {
+    return {
+      origin: true,
+      credentials: true,
+      methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+      allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept'],
+    };
+  }
+
+  // Support comma-separated origins with whitespace and trailing slash normalization
+  const allowedList = allowedOriginEnv
+    .split(',')
+    .map(o => o.trim().replace(/\/+$/, ''))
+    .filter(Boolean);
+
+  return {
+    origin: function (requestOrigin, callback) {
+      // Allow non-browser requests (e.g. curl, postman, health checkers)
+      if (!requestOrigin) return callback(null, true);
+
+      const cleanOrigin = requestOrigin.trim().replace(/\/+$/, '');
+
+      if (allowedList.includes(cleanOrigin) || allowedList.includes('*')) {
+        return callback(null, true);
+      }
+
+      // Always allow local development origins regardless of ALLOWED_ORIGIN setting
+      if (
+        /^https?:\/\/localhost(:\d+)?$/.test(cleanOrigin) ||
+        /^https?:\/\/127\.0\.0\.1(:\d+)?$/.test(cleanOrigin)
+      ) {
+        return callback(null, true);
+      }
+
+      console.warn(`[CORS Blocked] Origin "${requestOrigin}" is not in ALLOWED_ORIGIN list:`, allowedList);
+      return callback(new Error(`Not allowed by CORS: ${requestOrigin}`));
+    },
+    credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept'],
+  };
 }
+
+const corsMiddleware = cors(getCorsOptions());
+app.use(corsMiddleware);
+app.options('*', corsMiddleware);
 
 // ── REQUEST CONFIGURATION ─────────────────────────────────────────────
 app.use(express.json({ limit: '50mb' }));
