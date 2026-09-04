@@ -1,5 +1,7 @@
 require('dotenv').config();
 
+// Force DNS resolution to prefer IPv4.
+// This helps avoid Render IPv6 connection errors.
 const dns = require('dns');
 dns.setDefaultResultOrder('ipv4first');
 
@@ -32,25 +34,32 @@ function getResolvedSmtpConfig(clientSmtp = {}) {
   const envUser = process.env.SMTP_USER;
   const envPass = process.env.SMTP_PASS;
 
-  // Prefer Render environment variables when configured
+  // Prefer Render environment variables when configured.
   if (envUser && envPass) {
     return {
-      host: process.env.SMTP_HOST || clientSmtp.host || 'smtp.gmail.com',
+      host:
+        process.env.SMTP_HOST ||
+        clientSmtp.host ||
+        'smtp.gmail.com',
+
       port:
         Number(process.env.SMTP_PORT) ||
         Number(clientSmtp.port) ||
         587,
+
       user: envUser.trim(),
       pass: envPass,
+
       fromName:
         process.env.SMTP_FROM_NAME ||
         clientSmtp.fromName ||
         '',
+
       isFromEnv: true,
     };
   }
 
-  // Fallback to SMTP details supplied by the client
+  // Fallback to SMTP details supplied by the client.
   return {
     host: clientSmtp.host
       ? String(clientSmtp.host).trim()
@@ -72,6 +81,7 @@ function getResolvedSmtpConfig(clientSmtp = {}) {
   };
 }
 
+// ── SMTP VALIDATION ───────────────────────────────────────────────────
 function validateSmtpConfig(smtp) {
   if (!smtp || typeof smtp !== 'object') {
     return 'SMTP configuration is required';
@@ -104,11 +114,11 @@ function createTransporter(smtp) {
   const isSecure = port === 465;
 
   return nodemailer.createTransport({
-    host: smtp.host,
+    host: smtp.host || 'smtp.gmail.com',
     port,
     secure: isSecure,
 
-    // Force IPv4 to avoid Render IPv6 connection errors
+    // Force IPv4 to avoid Render IPv6 connection errors.
     family: 4,
 
     auth: {
@@ -116,14 +126,14 @@ function createTransporter(smtp) {
       pass: smtp.pass,
     },
 
-    pool: true,
-    maxConnections: 3,
-    maxMessages: 100,
+    // Disable pooling because a new transporter is created
+    // for each request and closed after the request.
+    pool: false,
 
-    // Connection timeout settings
-    connectionTimeout: 30000,
-    greetingTimeout: 30000,
-    socketTimeout: 60000,
+    // Connection timeout settings.
+    connectionTimeout: 60000,
+    greetingTimeout: 60000,
+    socketTimeout: 120000,
   });
 }
 
@@ -135,7 +145,7 @@ function validateEmail(email) {
   );
 }
 
-// ── HEALTH CHECK ─────────────────────────────────────────────────────
+// ── HEALTH CHECK ──────────────────────────────────────────────────────
 app.get(['/health', '/api/health'], (req, res) => {
   res.status(200).json({
     status: 'ok',
@@ -149,7 +159,8 @@ app.get(['/health', '/api/health'], (req, res) => {
   });
 });
 
-// ── CLIENT SMTP CONFIGURATION DISCOVERY ───────────────────────────────
+// ── CLIENT CONFIGURATION DISCOVERY ────────────────────────────────────
+// Password is never exposed to the frontend.
 app.get('/api/config', (req, res) => {
   const hasEnvSmtp = Boolean(
     process.env.SMTP_USER && process.env.SMTP_PASS
@@ -157,6 +168,7 @@ app.get('/api/config', (req, res) => {
 
   res.json({
     smtpPreconfigured: hasEnvSmtp,
+
     smtpHost: hasEnvSmtp
       ? process.env.SMTP_HOST || 'smtp.gmail.com'
       : null,
@@ -295,6 +307,7 @@ app.post('/api/send-email', async (req, res) => {
   try {
     transporter = createTransporter(effectiveSmtp);
 
+    // Clean the display name while preserving the authenticated email.
     const cleanFromName = effectiveSmtp.fromName
       ? String(effectiveSmtp.fromName)
         .replace(/[^\w\s-]/g, '')
@@ -354,7 +367,7 @@ app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, 'index.html'));
 });
 
-// ── START SERVER ─────────────────────────────────────────────────────
+// ── START SERVER ──────────────────────────────────────────────────────
 app.listen(PORT, () => {
   console.log(
     `EventCertificateMailer running on port ${PORT}`
@@ -365,6 +378,6 @@ app.listen(PORT, () => {
   );
 
   console.log(
-    `Health check ready at /health`
+    'Health check ready at /health'
   );
 });
