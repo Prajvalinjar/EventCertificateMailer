@@ -1578,13 +1578,15 @@
       const res = await fetch(`${API_BASE}/api/config`);
       if (res.ok) {
         const cfg = await res.json();
-        if (cfg.smtpPreconfigured) {
+        if (cfg.smtpPreconfigured || cfg.emailPreconfigured) {
           isServerSmtpConfigured = true;
           if (cfg.smtpHost) smtpHost.value = cfg.smtpHost;
           if (cfg.smtpPort) smtpPort.value = cfg.smtpPort;
-          if (cfg.smtpUser) smtpUser.value = cfg.smtpUser;
+          if (cfg.smtpUser || cfg.fromEmail) smtpUser.value = cfg.smtpUser || cfg.fromEmail;
           if (cfg.fromName && !smtpFromName.value) smtpFromName.value = cfg.fromName;
-          smtpPass.placeholder = 'Configured via Server Environment (.env)';
+          smtpPass.placeholder = cfg.emailProvider === 'Resend'
+            ? 'Configured via Resend API (.env)'
+            : 'Configured via Server Environment (.env)';
           updateSmtpBadge(true);
         }
       } else {

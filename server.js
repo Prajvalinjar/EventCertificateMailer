@@ -1,186 +1,44 @@
 require('dotenv').config();
 
-// Force DNS resolution to prefer IPv4.
-// This helps avoid Render IPv6 connection errors.
-const dns = require('dns');
-dns.setDefaultResultOrder('ipv4first');
-
 const express = require('express');
-const nodemailer = require('nodemailer');
 const cors = require('cors');
 const path = require('path');
+const { Resend } = require('resend');
 
 const app = express();
 
 const PORT = process.env.PORT || 3001;
 
+// ── RESEND CONFIGURATION ──────────────────────────────────────────────
+
+const resend = process.env.RESEND_API_KEY
+  ? new Resend(process.env.RESEND_API_KEY)
+  : null;
+
 // ── CORS CONFIGURATION ────────────────────────────────────────────────
-const allowedOriginEnv = process.env.ALLOWED_ORIGIN;
 
-function getCorsOptions() {
-  // If ALLOWED_ORIGIN is not specified, empty, or '*', permit all origins
-  if (!allowedOriginEnv || allowedOriginEnv.trim() === '*' || allowedOriginEnv.trim() === '') {
-    return {
-      origin: true,
-      credentials: true,
-      methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-      allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept'],
-    };
-  }
+const allowedOrigin = process.env.ALLOWED_ORIGIN;
 
-  // Support comma-separated origins with whitespace and trailing slash normalization
-  const allowedList = allowedOriginEnv
-    .split(',')
-    .map(o => o.trim().replace(/\/+$/, ''))
-    .filter(Boolean);
-
-  return {
-    origin: function (requestOrigin, callback) {
-      // Allow non-browser requests (e.g. curl, postman, health checkers)
-      if (!requestOrigin) return callback(null, true);
-
-      const cleanOrigin = requestOrigin.trim().replace(/\/+$/, '');
-
-      if (allowedList.includes(cleanOrigin) || allowedList.includes('*')) {
-        return callback(null, true);
-      }
-
-      // Always allow local development origins regardless of ALLOWED_ORIGIN setting
-      if (
-        /^https?:\/\/localhost(:\d+)?$/.test(cleanOrigin) ||
-        /^https?:\/\/127\.0\.0\.1(:\d+)?$/.test(cleanOrigin)
-      ) {
-        return callback(null, true);
-      }
-
-      console.warn(`[CORS Blocked] Origin "${requestOrigin}" is not in ALLOWED_ORIGIN list:`, allowedList);
-      return callback(new Error(`Not allowed by CORS: ${requestOrigin}`));
-    },
-    credentials: true,
-    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept'],
-  };
+if (allowedOrigin && allowedOrigin !== '*') {
+  app.use(
+    cors({
+      origin: allowedOrigin,
+    })
+  );
+} else {
+  app.use(cors());
 }
 
-const corsMiddleware = cors(getCorsOptions());
-app.use(corsMiddleware);
-app.options('*', corsMiddleware);
-
 // ── REQUEST CONFIGURATION ─────────────────────────────────────────────
+
 app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 app.use(express.static(path.join(__dirname)));
 
 const MAX_ATTACHMENT_BASE64_LENGTH = 20 * 1024 * 1024;
 
-// ── SMTP CONFIGURATION ────────────────────────────────────────────────
-function getResolvedSmtpConfig(clientSmtp = {}) {
-  const envUser = process.env.SMTP_USER;
-  const envPass = process.env.SMTP_PASS;
+// ── HELPER FUNCTIONS ──────────────────────────────────────────────────
 
-  // Prefer Render environment variables when configured.
-  if (envUser && envPass) {
-    return {
-      host:
-        process.env.SMTP_HOST ||
-        clientSmtp.host ||
-        'smtp.gmail.com',
-
-      port:
-        Number(process.env.SMTP_PORT) ||
-        Number(clientSmtp.port) ||
-        587,
-
-      user: envUser.trim(),
-      pass: envPass,
-
-      fromName:
-        process.env.SMTP_FROM_NAME ||
-        clientSmtp.fromName ||
-        '',
-
-      isFromEnv: true,
-    };
-  }
-
-  // Fallback to SMTP details supplied by the client.
-  return {
-    host: clientSmtp.host
-      ? String(clientSmtp.host).trim()
-      : 'smtp.gmail.com',
-
-    port: Number(clientSmtp.port) || 587,
-
-    user: clientSmtp.user
-      ? String(clientSmtp.user).trim()
-      : '',
-
-    pass: clientSmtp.pass || '',
-
-    fromName: clientSmtp.fromName
-      ? String(clientSmtp.fromName).trim()
-      : '',
-
-    isFromEnv: false,
-  };
-}
-
-// ── SMTP VALIDATION ───────────────────────────────────────────────────
-function validateSmtpConfig(smtp) {
-  if (!smtp || typeof smtp !== 'object') {
-    return 'SMTP configuration is required';
-  }
-
-  if (!smtp.host || typeof smtp.host !== 'string') {
-    return 'SMTP host is required';
-  }
-
-  if (!smtp.user || typeof smtp.user !== 'string') {
-    return 'SMTP username / email is required';
-  }
-
-  if (!smtp.pass || typeof smtp.pass !== 'string') {
-    return 'SMTP password or Google App Password is required';
-  }
-
-  const port = Number(smtp.port) || 587;
-
-  if (![25, 465, 587].includes(port)) {
-    return 'Unsupported SMTP port. Supported ports are 587, 465, or 25';
-  }
-
-  return null;
-}
-
-// ── CREATE SMTP TRANSPORTER ───────────────────────────────────────────
-function createTransporter(smtp) {
-  const port = Number(smtp.port) || 587;
-  const isSecure = port === 465;
-
-  return nodemailer.createTransport({
-    host: smtp.host || 'smtp.gmail.com',
-    port,
-    secure: isSecure,
-
-    // Force IPv4 to avoid Render IPv6 connection errors.
-    family: 4,
-
-    auth: {
-      user: smtp.user,
-      pass: smtp.pass,
-    },
-
-    // Disable pooling because a new transporter is created
-    // for each request and closed after the request.
-    pool: false,
-
-    // Connection timeout settings.
-    connectionTimeout: 60000,
-    greetingTimeout: 60000,
-    socketTimeout: 120000,
-  });
-}
-
-// ── EMAIL VALIDATION ──────────────────────────────────────────────────
 function validateEmail(email) {
   return (
     typeof email === 'string' &&
@@ -188,7 +46,39 @@ function validateEmail(email) {
   );
 }
 
+function validateResendConfiguration() {
+  if (!process.env.RESEND_API_KEY) {
+    return 'RESEND_API_KEY is not configured on the server';
+  }
+
+  if (!process.env.EMAIL_FROM) {
+    return 'EMAIL_FROM is not configured on the server';
+  }
+
+  return null;
+}
+
+function getFromAddress() {
+  const fromName = process.env.EMAIL_FROM_NAME || 'Event Certificate Team';
+  const fromEmail = process.env.EMAIL_FROM;
+
+  return `"${fromName}" <${fromEmail}>`;
+}
+
+function cleanFilename(filename) {
+  if (!filename || typeof filename !== 'string') {
+    return 'certificate.png';
+  }
+
+  const cleaned = filename
+    .replace(/[^\w\s.-]/g, '')
+    .trim();
+
+  return cleaned || 'certificate.png';
+}
+
 // ── HEALTH CHECK ──────────────────────────────────────────────────────
+
 app.get(['/health', '/api/health'], (req, res) => {
   res.status(200).json({
     status: 'ok',
@@ -196,88 +86,89 @@ app.get(['/health', '/api/health'], (req, res) => {
     uptime: Math.round(process.uptime()),
     timestamp: new Date().toISOString(),
     environment: process.env.NODE_ENV || 'production',
-    smtpConfigured: Boolean(
-      process.env.SMTP_USER && process.env.SMTP_PASS
-    ),
+    resendConfigured: Boolean(process.env.RESEND_API_KEY),
+    senderConfigured: Boolean(process.env.EMAIL_FROM),
   });
 });
 
 // ── CLIENT CONFIGURATION DISCOVERY ────────────────────────────────────
-// Password is never exposed to the frontend.
+// The API key is never exposed to the frontend.
+
 app.get('/api/config', (req, res) => {
-  const hasEnvSmtp = Boolean(
-    process.env.SMTP_USER && process.env.SMTP_PASS
-  );
-
   res.json({
-    smtpPreconfigured: hasEnvSmtp,
-
-    smtpHost: hasEnvSmtp
-      ? process.env.SMTP_HOST || 'smtp.gmail.com'
-      : null,
-
-    smtpPort: hasEnvSmtp
-      ? Number(process.env.SMTP_PORT) || 587
-      : null,
-
-    smtpUser: hasEnvSmtp
-      ? process.env.SMTP_USER
-      : null,
-
-    fromName: hasEnvSmtp
-      ? process.env.SMTP_FROM_NAME || ''
-      : null,
+    emailPreconfigured: Boolean(
+      process.env.RESEND_API_KEY && process.env.EMAIL_FROM
+    ),
+    emailProvider: 'Resend',
+    fromEmail: process.env.EMAIL_FROM || null,
+    fromName: process.env.EMAIL_FROM_NAME || 'Event Certificate Team',
   });
 });
 
-// ── TEST SMTP CONNECTION ──────────────────────────────────────────────
-app.post('/api/test-smtp', async (req, res) => {
-  const effectiveSmtp = getResolvedSmtpConfig(req.body.smtp);
-  const validationError = validateSmtpConfig(effectiveSmtp);
+// ── TEST EMAIL API CONNECTION ─────────────────────────────────────────
 
-  if (validationError) {
-    return res.status(400).json({
+app.post('/api/test-email', async (req, res) => {
+  const configurationError = validateResendConfiguration();
+
+  if (configurationError) {
+    return res.status(500).json({
       ok: false,
-      error: validationError,
+      error: configurationError,
     });
   }
 
-  let transporter;
+  const { to } = req.body;
+
+  if (!validateEmail(to)) {
+    return res.status(400).json({
+      ok: false,
+      error: 'A valid recipient email address is required',
+    });
+  }
 
   try {
-    transporter = createTransporter(effectiveSmtp);
+    const { data, error } = await resend.emails.send({
+      from: getFromAddress(),
+      to: [to.trim()],
+      subject: 'EventCertificateMailer Test Email',
+      html: `
+        <div style="font-family: Arial, sans-serif;">
+          <h2>Email Configuration Successful</h2>
+          <p>This is a test email from EventCertificateMailer.</p>
+          <p>Your Resend email integration is working correctly.</p>
+        </div>
+      `,
+    });
 
-    await transporter.verify();
+    if (error) {
+      console.error('Resend test email failed:', error);
+
+      return res.status(500).json({
+        ok: false,
+        error: error.message || 'Failed to send test email',
+      });
+    }
 
     return res.json({
       ok: true,
-      message: `SMTP connection successful via ${effectiveSmtp.host}:${effectiveSmtp.port}`,
-      source: effectiveSmtp.isFromEnv
-        ? 'environment'
-        : 'client',
+      message: `Test email sent successfully to ${to}`,
+      emailId: data?.id || null,
     });
   } catch (error) {
-    console.error(
-      'SMTP verification failed:',
-      error.message
-    );
+    console.error('Test email exception:', error.message);
 
     return res.status(500).json({
       ok: false,
-      error: 'SMTP connection failed. Please verify your SMTP settings.',
+      error: 'Failed to send test email',
       details: error.message,
     });
-  } finally {
-    if (transporter) {
-      transporter.close();
-    }
   }
 });
 
 // ── SEND CERTIFICATE EMAIL ────────────────────────────────────────────
+
 app.post('/api/send-email', async (req, res) => {
   const {
-    smtp,
     to,
     subject,
     html,
@@ -285,15 +176,18 @@ app.post('/api/send-email', async (req, res) => {
     filename,
   } = req.body;
 
-  const effectiveSmtp = getResolvedSmtpConfig(smtp);
-  const smtpError = validateSmtpConfig(effectiveSmtp);
+  // Validate server configuration
 
-  if (smtpError) {
-    return res.status(400).json({
+  const configurationError = validateResendConfiguration();
+
+  if (configurationError) {
+    return res.status(500).json({
       ok: false,
-      error: smtpError,
+      error: configurationError,
     });
   }
+
+  // Validate recipient
 
   if (!validateEmail(to)) {
     return res.status(400).json({
@@ -301,6 +195,8 @@ app.post('/api/send-email', async (req, res) => {
       error: `Invalid recipient email address: "${to}"`,
     });
   }
+
+  // Validate subject
 
   if (
     !subject ||
@@ -313,6 +209,8 @@ app.post('/api/send-email', async (req, res) => {
     });
   }
 
+  // Validate email body
+
   if (
     !html ||
     typeof html !== 'string' ||
@@ -323,6 +221,8 @@ app.post('/api/send-email', async (req, res) => {
       error: 'Email body content is required',
     });
   }
+
+  // Validate certificate attachment
 
   if (
     !attachmentBase64 ||
@@ -340,52 +240,54 @@ app.post('/api/send-email', async (req, res) => {
   ) {
     return res.status(400).json({
       ok: false,
-      error:
-        'Certificate attachment exceeds maximum allowed size (15MB)',
+      error: 'Certificate attachment exceeds the maximum allowed size',
     });
   }
 
-  let transporter;
-
   try {
-    transporter = createTransporter(effectiveSmtp);
+    const safeFilename = cleanFilename(filename);
 
-    // Clean the display name while preserving the authenticated email.
-    const cleanFromName = effectiveSmtp.fromName
-      ? String(effectiveSmtp.fromName)
-        .replace(/[^\w\s-]/g, '')
-        .trim()
-      : '';
+    // Remove the data URL prefix if the frontend sends one.
+    // Example:
+    // data:image/png;base64,iVBORw0KGgo...
+    const cleanBase64 = attachmentBase64.includes(',')
+      ? attachmentBase64.split(',')[1]
+      : attachmentBase64;
 
-    const fromAddress = cleanFromName
-      ? `"${cleanFromName}" <${effectiveSmtp.user}>`
-      : effectiveSmtp.user;
-
-    const safeFilename = filename
-      ? String(filename)
-        .replace(/[^\w\s.-]/g, '')
-        .trim()
-      : 'certificate.png';
-
-    await transporter.sendMail({
-      from: fromAddress,
-      to: to.trim(),
+    const { data, error } = await resend.emails.send({
+      from: getFromAddress(),
+      to: [to.trim()],
       subject: subject.trim(),
       html,
 
       attachments: [
         {
           filename: safeFilename,
-          content: attachmentBase64,
-          encoding: 'base64',
-          contentType: 'image/png',
+          content: cleanBase64,
         },
       ],
     });
 
+    if (error) {
+      console.error(
+        `Failed to send certificate email to ${to}:`,
+        error
+      );
+
+      return res.status(500).json({
+        ok: false,
+        error: error.message || 'Failed to send certificate email',
+      });
+    }
+
+    console.log(
+      `Certificate email sent successfully to ${to}. Email ID: ${data?.id}`
+    );
+
     return res.json({
       ok: true,
-      message: `Certificate email successfully dispatched to ${to}`,
+      message: `Certificate email successfully sent to ${to}`,
+      emailId: data?.id || null,
     });
   } catch (error) {
     console.error(
@@ -395,22 +297,20 @@ app.post('/api/send-email', async (req, res) => {
 
     return res.status(500).json({
       ok: false,
-      error: 'Failed to deliver email through Gmail SMTP',
+      error: 'Failed to deliver certificate email',
       details: error.message,
     });
-  } finally {
-    if (transporter) {
-      transporter.close();
-    }
   }
 });
 
 // ── SPA FALLBACK ROUTE ────────────────────────────────────────────────
-app.get('*', (req, res) => {
+
+app.get(/.*/, (req, res) => {
   res.sendFile(path.join(__dirname, 'index.html'));
 });
 
-// ── START SERVER ──────────────────────────────────────────────────────
+// ── START SERVER ─────────────────────────────────────────────────────
+
 app.listen(PORT, () => {
   console.log(
     `EventCertificateMailer running on port ${PORT}`
@@ -421,6 +321,14 @@ app.listen(PORT, () => {
   );
 
   console.log(
-    'Health check ready at /health'
+    `Resend configured: ${Boolean(process.env.RESEND_API_KEY)}`
+  );
+
+  console.log(
+    `Sender configured: ${Boolean(process.env.EMAIL_FROM)}`
+  );
+
+  console.log(
+    `Health check ready at /health`
   );
 });

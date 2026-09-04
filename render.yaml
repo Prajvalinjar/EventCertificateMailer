@@ -10,14 +10,12 @@ services:
     envVars:
       - key: NODE_ENV
         value: production
-      - key: SMTP_HOST
-        value: smtp.gmail.com
-      - key: SMTP_PORT
-        value: "587"
-      - key: SMTP_FROM_NAME
+      # Resend API configuration (set your real secret in the Render Dashboard)
+      - key: RESEND_API_KEY
+        sync: false
+      - key: EMAIL_FROM
+        sync: false
+      - key: EMAIL_FROM_NAME
         value: Event Certificate Team
-      # Set your actual Gmail credentials in the Render Dashboard (sync: false protects them from Git)
-      - key: SMTP_USER
-        sync: false
-      - key: SMTP_PASS
-        sync: false
+      - key: ALLOWED_ORIGIN
+        value: "*"
